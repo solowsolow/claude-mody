@@ -1,0 +1,28 @@
+{
+  "name": "claude-mody",
+  "owner": {
+    "name": "solowsolow"
+  },
+  "plugins": [
+    {
+      "name": "usage-bar",
+      "source": "./usage-bar",
+      "description": "Pasek nad promptem: stan cache promptu, zapełnienie kontekstu, limit 5h z odliczaniem do resetu, limit tygodniowy i przycisk /compact"
+    },
+    {
+      "name": "context-bar",
+      "source": "./context-bar",
+      "description": "Karta nad promptem z podziałem kontekstu na kategorie: pasek proporcji, próg auto-kompaktowania i legenda z tokenami"
+    },
+    {
+      "name": "radar-sesji",
+      "source": "./radar-sesji",
+      "description": "Linia nad promptem i panel /sesje: inne sesje Claude na tym komputerze, które czekają na Twoją zgodę, odpowiedź albo skończyły turę"
+    },
+    {
+      "name": "collision-guard",
+      "source": "./collision-guard",
+      "description": "Ostrzega, gdy druga sesja Claude chce edytować plik niedawno zmieniany przez inną aktywną sesję, i proponuje pracę w osobnym worktree"
+    }
+  ]
+}

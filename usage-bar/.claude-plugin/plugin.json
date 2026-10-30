@@ -1,0 +1,15 @@
+{
+  "name": "usage-bar",
+  "version": "0.2.5",
+  "description": "Pasek nad promptem: stan cache promptu, zapełnienie kontekstu, limit 5h z odliczaniem do resetu i limit tygodniowy",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "cacheTtl": {
+      "type": "string",
+      "title": "TTL cache promptu (minuty)",
+      "description": "Jak długo cache promptu zostaje ciepły po ostatnim zapytaniu: 60 przy 1-godzinnym TTL, 5 przy domyślnym",
+      "default": "60",
+      "options": ["60", "5"]
+    }
+  }
+}

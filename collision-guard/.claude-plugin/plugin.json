@@ -1,0 +1,15 @@
+{
+  "name": "collision-guard",
+  "version": "0.1.1",
+  "description": "Ostrzega, gdy druga sesja Claude chce edytować plik, który niedawno zmieniała inna aktywna sesja, i proponuje pracę w osobnym worktree",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "windowMinutes": {
+      "type": "string",
+      "title": "Okno kolizji (minuty)",
+      "description": "Jak dawną edycję innej sesji uznać za kolizję",
+      "default": "30",
+      "options": ["15", "30", "60"]
+    }
+  }
+}

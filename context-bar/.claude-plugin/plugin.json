@@ -1,0 +1,6 @@
+{
+  "name": "context-bar",
+  "version": "0.2.3",
+  "description": "Karta nad promptem z podziałem kontekstu na kategorie: pasek proporcji, próg auto-kompaktowania i legenda z tokenami",
+  "types": "./types/index.d.ts"
+}

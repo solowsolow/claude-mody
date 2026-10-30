@@ -1,0 +1,6 @@
+{
+  "name": "radar-sesji",
+  "version": "0.2.1",
+  "description": "Linia nad promptem i panel /sesje: inne sesje Claude na tym komputerze, które czekają na Twoją zgodę, odpowiedź albo skończyły turę",
+  "types": "./types/index.d.ts"
+}
