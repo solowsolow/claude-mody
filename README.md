@@ -135,3 +135,7 @@ Nic nie jest wysyłane poza Twój komputer. radar-sesji i collision-guard zapisu
 ## Dla zaglądających w kod
 
 Każdy mod ma testy (`claude plugin test <folder moda>`) i przechodzi `claude plugin validate <folder moda>`.
+
+## Licencja
+
+MIT, pełny tekst w pliku [LICENSE](LICENSE). Mody wolno używać, kopiować, przerabiać i udostępniać dalej, także w zmienionej wersji, pod warunkiem zachowania informacji o licencji.
