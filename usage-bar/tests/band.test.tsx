@@ -1,6 +1,8 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
+import { isHeadlessRefusal } from '../hooks/register'
+
 const T0 = Date.parse('2026-10-29T15:00:00Z')
 const MIN = 60_000
 
@@ -35,7 +37,11 @@ function engine(
   on('session.usage', (_, e) => {
     const tokens = compact.tokens ?? 72_400
     const breakdown = e?.breakdown
-      ? { isAutoCompactEnabled: compact.isOn, autoCompactThreshold: compact.isOn ? compact.at : undefined }
+      ? {
+          isAutoCompactEnabled: compact.isOn,
+          autoCompactThreshold: compact.isOn ? compact.at : undefined,
+          totalTokens: 187_000,
+        }
       : undefined
     return {
       value: { startedAt: T0, context: { tokens, window: 1_000_000, percent: 36, breakdown }, rateLimits },
@@ -52,6 +58,12 @@ const LIMITS = [
   { kind: 'five_hour', percentUsed: 34, resetsAt: new Date(T0 + 40 * MIN).toISOString() },
   { kind: 'seven_day', percentUsed: 7 },
 ]
+
+// The press only starts a compaction; its outcome lands a few engine round
+// trips later. Each find is one such trip.
+async function until(ui: { find: (q: { key: string }) => Promise<unknown> }, isDone: () => boolean) {
+  for (let i = 0; i < 50 && !isDone(); i++) await ui.find({ key: 'compact' })
+}
 
 async function endTurn($: Parameters<Extract<Parameters<typeof test>[1], (...args: never[]) => unknown>>[0]) {
   await $.turn.complete({ answer: 'ok', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
@@ -207,6 +219,7 @@ test('the /compact button compacts once and says how it went', async ($, on) => 
 
   const ui = await $.ui.mount({ ...band(100), surface: 'desktop' })
   await ui.press({ key: 'compact' })
+  await until(ui, () => toasts.length > 0)
   expect(calls).toBe(1)
   expect(toasts).toEqual(['Kompaktowanie pominięte: nothing to compact yet'])
   expect((await ui.find({ key: 'compact' }))?.text).toBe('→←')
@@ -344,5 +357,91 @@ test('the engine\'s empty slot beneath is kept, with no gap beside it', async ($
   const ui = await $.ui.mount({ ...band(100), surface: 'desktop' })
   expect((await ui.findAll({ type: 'Box' })).find(b => b.key === 'usage-band')?.props.gap).toBe(0)
   expect(await ui.find({ key: 'compact' })).toBeDefined()
+  await ui.unmount()
+})
+
+// As the engine refuses $.session.compact in the desktop app and the SDK,
+// copied from the toast it raised there.
+const HEADLESS_REFUSAL =
+  '$.session.compact: not available in a headless (-p / SDK) session yet: compaction here runs inside a turn (a /compact prompt); catch it and carry on'
+
+test('the engine\'s headless refusal is told apart from any other', () => {
+  expect(isHeadlessRefusal(HEADLESS_REFUSAL)).toBe(true)
+  expect(isHeadlessRefusal('a turn is running')).toBe(false)
+  expect(isHeadlessRefusal('no implementation for session.compact')).toBe(false)
+})
+
+test('in a session the SDK hosts, the button runs the /compact command', async ($, on) => {
+  engine(on, LIMITS)
+  const submitted: string[] = []
+  const toasts: string[] = []
+  let compactCalls = 0
+  on('session.compact', () => (compactCalls++, { skip: 'never asked' }))
+  on('command.run', (_, e) => (submitted.push(`/${e.command}`), {}))
+  on('ui.toast', (_, e) => (toasts.push(e.text), { value: undefined }))
+  await $.session.start({ cwd: '/', surface: null, isInteractive: false })
+
+  const ui = await $.ui.mount({ ...band(100), surface: 'desktop' })
+  await ui.press({ key: 'compact' })
+  await until(ui, () => toasts.length > 0)
+  expect(submitted).toEqual(['/compact'])
+  expect(compactCalls).toBe(0)
+  expect(toasts).toEqual(['Kompaktowanie uruchomione.'])
+  // The button is free again for the next press.
+  expect((await ui.find({ key: 'compact' }))?.text).toBe('→←')
+  await ui.unmount()
+})
+
+test('any other refusal is reported, and nothing is run in its place', async ($, on) => {
+  engine(on, LIMITS)
+  const submitted: string[] = []
+  const toasts: string[] = []
+  on('command.run', (_, e) => (submitted.push(`/${e.command}`), {}))
+  on('ui.toast', (_, e) => (toasts.push(e.text), { value: undefined }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+
+  // No implementation beneath: the engine rejects, for a reason that is not
+  // the headless one.
+  const ui = await $.ui.mount({ ...band(100), surface: 'desktop' })
+  await ui.press({ key: 'compact' })
+  await until(ui, () => toasts.length > 0)
+  expect(submitted).toEqual([])
+  expect(toasts).toEqual(['Kompaktowanie nie powiodło się: no implementation for session.compact'])
+  await ui.unmount()
+})
+
+// A /compact runs 20 s and more, past a press hook's 10 s budget: the press
+// returns at once, the button waits as ⋯, and the outcome comes later.
+test('the press returns before the compaction ends', async ($, on) => {
+  engine(on, LIMITS)
+  const toasts: string[] = []
+  let finish: () => void = () => {}
+  on('command.run', () => new Promise(done => (finish = () => done({}))))
+  on('ui.toast', (_, e) => (toasts.push(e.text), { value: undefined }))
+  await $.session.start({ cwd: '/', surface: null, isInteractive: false })
+
+  const ui = await $.ui.mount({ ...band(100), surface: 'desktop' })
+  await ui.press({ key: 'compact' })
+  expect((await ui.find({ key: 'compact' }))?.text).toBe('⋯')
+  expect(toasts).toEqual([])
+
+  finish()
+  await until(ui, () => toasts.length > 0)
+  expect(toasts).toEqual(['Kompaktowanie uruchomione.'])
+  await until(ui, () => false)
+  expect((await ui.find({ key: 'compact' }))?.text).toBe('→←')
+  await ui.unmount()
+})
+
+// Right after compaction no response has been answered yet, so the engine has
+// no fill to report; the band shows the local estimate instead of nothing.
+test('with no response since compaction, ctx shows the estimate', async ($, on) => {
+  engine(on, LIMITS)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.session.measure({ context: { window: 1_000_000 }, rateLimits: LIMITS, changed: ['context'] })
+
+  const ui = await $.ui.mount({ ...band(100), surface: 'desktop' })
+  expect((await ui.find({ type: 'Text', text: /^187k$/ }))?.text).toBe('187k')
+  expect((await ui.find({ type: 'Text', text: /compact in/ }))?.text).toBe(' · compact in 780k')
   await ui.unmount()
 })

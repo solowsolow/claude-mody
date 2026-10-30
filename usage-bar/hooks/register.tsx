@@ -15,6 +15,10 @@ const dot = atom({ plugin: 'usage-bar', key: 'dot' } as const, { state: 'unknown
 // Tokens at which auto-compaction runs; 0 while unknown or switched off.
 const compactAt = atom({ plugin: 'usage-bar', key: 'compactAt' } as const, 0)
 const isCompacting = atom({ plugin: 'usage-bar', key: 'isCompacting' } as const, false)
+// The window's fill as /context estimates it locally; 0 while unread. Drawn
+// only while the last response's figure is missing: right after compaction,
+// until the next response is answered.
+const ctxEstimate = atom({ plugin: 'usage-bar', key: 'ctxEstimate' } as const, 0)
 const flash = atom({ plugin: 'usage-bar', key: 'flash' } as const, {}, { shape: 'flash-1' })
 
 // Countdowns show minutes, so a quarter-minute tick keeps them honest.
@@ -140,13 +144,15 @@ async function rememberRequest($: Engine, at: number): Promise<void> {
 }
 
 // The threshold changes with the model, so it is read once a turn, from the
-// locally estimated breakdown (no API request), not at every measurement.
-async function readThreshold($: Engine): Promise<void> {
+// locally estimated breakdown (no API request), not at every measurement; the
+// estimated fill rides along.
+async function readBreakdown($: Engine): Promise<void> {
   try {
     const { context } = await $.session.usage({ breakdown: 'summary' })
     const b = context.breakdown
     const at = b?.isAutoCompactEnabled ? b.autoCompactThreshold ?? 0 : 0
     await update($, compactAt, () => at)
+    await update($, ctxEstimate, () => b?.totalTokens ?? 0)
   } catch {
     // No session bound yet: the next turn reads it.
   }
@@ -210,12 +216,53 @@ function isEngineSlot(node: unknown): boolean {
   return el.type === 'Box' && (el.children ?? []).every(isEngineSlot)
 }
 
+// How $.session.compact refuses in a session with no prompt of the engine's
+// own (the desktop app, the SDK): there compaction runs inside a turn.
+const HEADLESS = /headless|inside a turn/i
+
+export function isHeadlessRefusal(message: string): boolean {
+  return HEADLESS.test(message)
+}
+
+// Set at session start: no surface and nobody at the engine's prompt is a
+// session the SDK hosts, where /compact is the only way to compact.
+let isHeadless = false
+
+// Compacts and says how it went in a toast; never rejects. The desktop app and
+// the SDK host a session without the engine's own prompt, where compaction
+// runs inside a turn: the /compact command is that turn. Run as a command; a
+// prompt "/compact" is refused, as a plugin's text beginning with a slash
+// would run a command as the user.
+async function runCompact($: Engine): Promise<void> {
+  const viaCommand = () =>
+    $.command
+      .run({ command: 'compact' })
+      .then(done => $.ui.toast(done.text?.trim() ? `Kompaktowanie: ${done.text.trim()}` : 'Kompaktowanie uruchomione.'))
+      .catch((again: unknown) =>
+        $.ui.toast(`Kompaktowanie nie powiodło się: ${again instanceof Error ? again.message : String(again)}`),
+      )
+  try {
+    if (isHeadless) {
+      await viaCommand()
+    } else {
+      const done = await $.session.compact()
+      await $.ui.toast(done.skip !== undefined ? `Kompaktowanie pominięte: ${done.skip}` : 'Kontekst skompaktowany.')
+    }
+  } catch (error) {
+    const why = error instanceof Error ? error.message : String(error)
+    if (isHeadlessRefusal(why)) await viaCommand()
+    else await $.ui.toast(`Kompaktowanie nie powiodło się: ${why}`)
+  }
+  await readBreakdown($)
+}
+
 // ---------------------------------------------------------------- module
 
 export const register: Register = (on, options) => {
   const ttlMs = Number(options.cacheTtl ?? '60') * MINUTE
 
   on('session.start', async ($, e, next) => {
+    isHeadless = e.surface === null && e.isInteractive === false
     await $.command.register({
       name: 'usage-bar',
       description: 'Pokaż albo schowaj pasek cache / kontekstu / limitów nad promptem',
@@ -227,7 +274,7 @@ export const register: Register = (on, options) => {
     if (recalled > (await read($, cacheAt))) await update($, cacheAt, () => recalled)
     await stamp($)
     await settleDot($, ttlMs)
-    await readThreshold($)
+    await readBreakdown($)
     $.clock.every(TICK_MS, () => void stamp($).then(() => settleDot($, ttlMs)))
 
     return next(e)
@@ -245,6 +292,7 @@ export const register: Register = (on, options) => {
     const before = await read($, usage)
     const after = keepResets(before, snapshot(e), await $.clock.now())
     await update($, usage, () => after)
+    if (after.ctxTokens === undefined) await readBreakdown($)
 
     for (const key of ['five', 'week'] as const) {
       const crossed = level(after[key]?.percent)
@@ -275,7 +323,7 @@ export const register: Register = (on, options) => {
       await update($, isWorking, () => false)
       await rememberRequest($, await stamp($))
       await settleDot($, ttlMs)
-      await readThreshold($)
+      await readBreakdown($)
     }
 
     return next(e)
@@ -293,6 +341,8 @@ export const register: Register = (on, options) => {
     const lit = await read($, flash)
     const busy = await read($, isCompacting)
     const threshold = await read($, compactAt)
+    const estimate = await read($, ctxEstimate)
+    const ctxTokens = figures.ctxTokens ?? (estimate > 0 ? estimate : undefined)
     // The band reads a step down from the transcript; the terminal has one size.
     const fs = isTerminal ? undefined : ('footnote' as const)
 
@@ -320,9 +370,9 @@ export const register: Register = (on, options) => {
     const SEP = 5
     const five = figures.five
     const week = figures.week
-    const ctxText = figures.ctxTokens !== undefined ? `ctx ${tokens(figures.ctxTokens)}` : undefined
+    const ctxText = ctxTokens !== undefined ? `ctx ${tokens(ctxTokens)}` : undefined
     const resetsText = five?.resetsAt !== undefined ? ` · resets ${countdown(five.resetsAt - at)}` : undefined
-    const toCompact = threshold > 0 && figures.ctxTokens !== undefined ? threshold - figures.ctxTokens : undefined
+    const toCompact = threshold > 0 && ctxTokens !== undefined ? threshold - ctxTokens : undefined
     const compactText = toCompact !== undefined ? ` · compact in ${tokens(Math.max(0, toCompact))}` : undefined
     const show = {
       ctx: ctxText !== undefined,
@@ -377,12 +427,12 @@ export const register: Register = (on, options) => {
       </Box>,
     ]
 
-    if (show.ctx && figures.ctxTokens !== undefined) {
+    if (show.ctx && ctxTokens !== undefined) {
       parts.push(sep('s-ctx'))
       parts.push(
         <Box key="ctx" flexDirection="row">
           <Text dimColor size={fs}>ctx </Text>
-          <Text color={(figures.ctxPercent ?? 0) >= 80 ? RED : BLUE} tabular size={fs}>{tokens(figures.ctxTokens)}</Text>
+          <Text color={(figures.ctxPercent ?? 0) >= 80 ? RED : BLUE} tabular size={fs}>{tokens(ctxTokens)}</Text>
           {show.compact && <Text color={compactColor} tabular size={fs}>{compactText}</Text>}
         </Box>,
       )
@@ -409,17 +459,12 @@ export const register: Register = (on, options) => {
       )
     }
 
+    // The press only starts it: a compaction outlasts a hook's 10 s budget
+    // (23 s measured in the desktop app), so the outcome comes as a toast.
     const compact = async () => {
       if (await read($, isCompacting)) return
       await update($, isCompacting, () => true)
-      try {
-        const done = await $.session.compact()
-        $.ui.toast(done.skip !== undefined ? `Kompaktowanie pominięte: ${done.skip}` : 'Kontekst skompaktowany.')
-      } catch (error) {
-        $.ui.toast(`Kompaktowanie nie powiodło się: ${error instanceof Error ? error.message : String(error)}`)
-      } finally {
-        await update($, isCompacting, () => false)
-      }
+      void runCompact($).finally(() => update($, isCompacting, () => false))
     }
 
     const row = (
