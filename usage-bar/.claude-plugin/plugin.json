@@ -1,6 +1,6 @@
 {
   "name": "usage-bar",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "Pasek nad promptem: stan cache promptu, zapełnienie kontekstu, limit 5h z odliczaniem do resetu i limit tygodniowy",
   "types": "./types/index.d.ts",
   "userConfig": {

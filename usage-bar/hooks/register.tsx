@@ -19,6 +19,9 @@ const isCompacting = atom({ plugin: 'usage-bar', key: 'isCompacting' } as const,
 // only while the last response's figure is missing: right after compaction,
 // until the next response is answered.
 const ctxEstimate = atom({ plugin: 'usage-bar', key: 'ctxEstimate' } as const, 0)
+// The fill shown when the last compaction landed; 0 once a response reported
+// a new one. A measurement still carrying it is the figure from before.
+const staleCtx = atom({ plugin: 'usage-bar', key: 'staleCtx' } as const, 0)
 const flash = atom({ plugin: 'usage-bar', key: 'flash' } as const, {}, { shape: 'flash-1' })
 
 // Countdowns show minutes, so a quarter-minute tick keeps them honest.
@@ -256,6 +259,14 @@ async function runCompact($: Engine): Promise<void> {
   await readBreakdown($)
 }
 
+// A compaction raises no measurement of its own, so the last response's fill
+// would stay drawn until the next one: dropped here, the estimate stands in.
+async function settleCompacted($: Engine, shown: number | undefined): Promise<void> {
+  await update($, staleCtx, () => shown ?? 0)
+  await update($, usage, u => ({ ...u, ctxTokens: undefined, ctxPercent: undefined }))
+  await readBreakdown($)
+}
+
 // ---------------------------------------------------------------- module
 
 export const register: Register = (on, options) => {
@@ -290,7 +301,10 @@ export const register: Register = (on, options) => {
   // Raised whenever the context fill, a rate-limit window or the cost moves.
   on('session.measure', async ($, e, next) => {
     const before = await read($, usage)
-    const after = keepResets(before, snapshot(e), await $.clock.now())
+    const stale = await read($, staleCtx)
+    const fresh = stale > 0 && e.context.tokens === stale ? { ...e, context: { window: e.context.window } } : e
+    if (stale > 0 && fresh === e && e.context.tokens !== undefined) await update($, staleCtx, () => 0)
+    const after = keepResets(before, snapshot(fresh), await $.clock.now())
     await update($, usage, () => after)
     if (after.ctxTokens === undefined) await readBreakdown($)
 
@@ -305,6 +319,16 @@ export const register: Register = (on, options) => {
     }
 
     return next(e)
+  })
+
+  // Whatever starts it: the button, a typed /compact, the threshold. A
+  // precompute changes nothing yet, a subagent's leaves the main window be.
+  on('session.compact', async ($, e, next) => {
+    if (e.agentId || e.trigger === 'precompute') return next(e)
+    const shown = (await read($, usage)).ctxTokens
+    const done = next(e)
+    void done.then(r => (r.skip === undefined ? settleCompacted($, shown) : undefined)).catch(() => {})
+    return done
   })
 
   // Only the main loop's requests keep the main conversation's cache warm.

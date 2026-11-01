@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import type { On } from 'claude-code'
+import type { On, SessionMessage } from 'claude-code'
 
 import { isHeadlessRefusal } from '../hooks/register'
 
@@ -443,5 +443,33 @@ test('with no response since compaction, ctx shows the estimate', async ($, on) 
   const ui = await $.ui.mount({ ...band(100), surface: 'desktop' })
   expect((await ui.find({ type: 'Text', text: /^187k$/ }))?.text).toBe('187k')
   expect((await ui.find({ type: 'Text', text: /compact in/ }))?.text).toBe(' · compact in 780k')
+  await ui.unmount()
+})
+
+// A compaction raises no measurement, and the one after its turn may still
+// carry the figure from before: the band drops that figure as the compaction
+// lands and shows the estimate until a response reports a new one.
+test('after a compaction ctx drops the figure from before', async ($, on) => {
+  engine(on, LIMITS)
+  const summary: SessionMessage[] = [{ role: 'user', text: 'podsumowanie', toolUses: [] }]
+  on('session.compact', () => ({ messages: summary, tokensAfter: 50_000 }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const measure = (tokens: number) =>
+    $.session.measure({ context: { tokens, window: 1_000_000, percent: 61 }, rateLimits: LIMITS, changed: ['context'] })
+  await measure(606_000)
+
+  const ui = await $.ui.mount({ ...band(100), surface: 'desktop' })
+  expect((await ui.find({ type: 'Text', text: /^606k$/ }))?.text).toBe('606k')
+
+  await $.session.compact({ trigger: 'manual', messages: summary } as never)
+  const shows = (n: string) => async () => (await ui.find({ type: 'Text', text: new RegExp(`^${n}$`) }))?.text
+  for (let i = 0; i < 50 && !(await shows('187k')()); i++);
+  expect(await shows('187k')()).toBe('187k')
+
+  await measure(606_000)
+  expect(await shows('187k')()).toBe('187k')
+
+  await measure(190_000)
+  expect(await shows('190k')()).toBe('190k')
   await ui.unmount()
 })

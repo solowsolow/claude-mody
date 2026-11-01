@@ -29,6 +29,7 @@ declare module 'claude-code' {
       isCompacting: boolean
       compactAt: number
       ctxEstimate: number
+      staleCtx: number
       dot: Shaped<Dot>
       flash: Shaped<Partial<Record<LimitKey, Flash>>>
     }
