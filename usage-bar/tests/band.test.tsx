@@ -473,3 +473,67 @@ test('after a compaction ctx drops the figure from before', async ($, on) => {
   expect(await shows('190k')()).toBe('190k')
   await ui.unmount()
 })
+
+// What a compaction took and what it cost, told once it lands, whatever
+// started it; the summarizer's request is the cost, read from the cache or not.
+test('a compaction says how far it shrank the window and what it cost', async ($, on) => {
+  engine(on, LIMITS)
+  const toasts: string[] = []
+  on('ui.toast', (_, e) => (toasts.push(e.text), { value: undefined }))
+  const summary: SessionMessage[] = [{ role: 'user', text: 'podsumowanie', toolUses: [] }]
+  const usage = { input_tokens: 2, cache_creation_input_tokens: 1_491, cache_read_input_tokens: 604_566, output_tokens: 7_000 }
+  let result: object = { messages: summary, tokensBefore: 606_423, tokensAfter: 73_836, usage }
+  on('session.compact', () => result as never)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...band(100), surface: 'desktop' })
+
+  await $.session.compact({ trigger: 'manual', messages: summary } as never)
+  await until(ui, () => toasts.length > 0)
+  expect(toasts).toEqual(['Skompaktowano 606k → 74k · koszt: 7k wyjścia, 1k wejścia, 605k z cache'])
+
+  // A summary computed ahead of time, or a hook's, made no request of its own.
+  result = { messages: summary, tokensBefore: 639_388, tokensAfter: 73_836 }
+  await $.session.compact({ trigger: 'auto', messages: summary } as never)
+  await until(ui, () => toasts.length > 1)
+  expect(toasts[1]).toBe('Skompaktowano 639k → 74k · bez danych o koszcie')
+  await ui.unmount()
+})
+
+// The button's own word stands in only when no compaction landed.
+test('a press whose compaction landed adds no toast of its own', async ($, on) => {
+  engine(on, LIMITS)
+  const toasts: string[] = []
+  on('ui.toast', (_, e) => (toasts.push(e.text), { value: undefined }))
+  const summary: SessionMessage[] = [{ role: 'user', text: 'podsumowanie', toolUses: [] }]
+  on('session.compact', () => ({ messages: summary, tokensBefore: 606_423, tokensAfter: 73_836 }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+
+  const ui = await $.ui.mount({ ...band(100), surface: 'desktop' })
+  await ui.press({ key: 'compact' })
+  await until(ui, () => toasts.length > 0)
+  await until(ui, () => false)
+  expect(toasts).toEqual(['Skompaktowano 606k → 74k · bez danych o koszcie'])
+  await ui.unmount()
+})
+
+// Where the SDK hosts the session the button runs /compact, whose compaction
+// passes this mod's hook: one toast, the hook's, not the button's too.
+test('in a session the SDK hosts, a landed /compact is told once', async ($, on) => {
+  engine(on, LIMITS)
+  const toasts: string[] = []
+  on('ui.toast', (_, e) => (toasts.push(e.text), { value: undefined }))
+  const summary: SessionMessage[] = [{ role: 'user', text: 'podsumowanie', toolUses: [] }]
+  on('session.compact', () => ({ messages: summary, tokensBefore: 606_423, tokensAfter: 73_836 }))
+  on('command.run', async () => {
+    await $.session.compact({ trigger: 'manual', messages: summary } as never)
+    return {}
+  })
+  await $.session.start({ cwd: '/', surface: null, isInteractive: false })
+
+  const ui = await $.ui.mount({ ...band(100), surface: 'desktop' })
+  await ui.press({ key: 'compact' })
+  await until(ui, () => toasts.length > 0)
+  await until(ui, () => false)
+  expect(toasts).toEqual(['Skompaktowano 606k → 74k · bez danych o koszcie'])
+  await ui.unmount()
+})

@@ -91,7 +91,7 @@ Pasek nad polem promptu:
 - **cache warm Nm**: minuty do wygaśnięcia cache promptu głównej rozmowy, liczone od ostatniej tury. Dopóki cache jest „ciepły”, kolejne wiadomości są szybkie i tanie, bo dotychczasowa rozmowa jest odczytywana z pamięci podręcznej. Po wygaśnięciu („cache cold”) pierwsza wiadomość przelicza całą rozmowę od nowa. W ostatnich minutach kropka robi się bursztynowa, po wygaśnięciu szara.
 - **ctx**: tokeny w oknie kontekstu, a **compact in** pokazuje, ile zostało do automatycznego kompaktowania.
 - **5h / week**: okna limitów subskrypcji. Kolor zmienia się przy 50% i 80%, a **resets** odlicza czas do resetu okna 5h.
-- **→←**: kompaktuje rozmowę (to samo co `/compact`).
+- **→←**: kompaktuje rozmowę (to samo co `/compact`). Po każdym kompaktowaniu, także automatycznym, toast mówi, ile ubyło z okna i ile kosztowało podsumowanie, np. „Skompaktowano 606k → 74k · koszt: 7k wyjścia, 1k wejścia, 605k z cache”. Gdy podsumowanie było policzone zawczasu, toast mówi „bez danych o koszcie”.
 - `/usage-bar` chowa i pokazuje pasek.
 
 Opcja `cacheTtl` (60 albo 5 minut) ustawia czas życia cache, bo Claude Code go modom nie podaje. Przy subskrypcji Pro/Max zostaw 60.

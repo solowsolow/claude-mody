@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface as Engine, Register, SessionRateLimit, SessionUsage } from 'claude-code'
+import type { EngineInterface as Engine, Register, SessionCompacted, SessionRateLimit, SessionUsage } from 'claude-code'
 
 import type { CacheState, Dot, Flash, LimitKey, Usage, UsageWindow } from '../types'
 
@@ -237,10 +237,16 @@ let isHeadless = false
 // prompt "/compact" is refused, as a plugin's text beginning with a slash
 // would run a command as the user.
 async function runCompact($: Engine): Promise<void> {
+  const before = landed
+  const shown = (await read($, usage)).ctxTokens
   const viaCommand = () =>
     $.command
       .run({ command: 'compact' })
-      .then(done => $.ui.toast(done.text?.trim() ? `Kompaktowanie: ${done.text.trim()}` : 'Kompaktowanie uruchomione.'))
+      .then(done =>
+        landed === before
+          ? $.ui.toast(done.text?.trim() ? `Kompaktowanie: ${done.text.trim()}` : 'Kompaktowanie uruchomione.')
+          : undefined,
+      )
       .catch((again: unknown) =>
         $.ui.toast(`Kompaktowanie nie powiodło się: ${again instanceof Error ? again.message : String(again)}`),
       )
@@ -249,7 +255,9 @@ async function runCompact($: Engine): Promise<void> {
       await viaCommand()
     } else {
       const done = await $.session.compact()
-      await $.ui.toast(done.skip !== undefined ? `Kompaktowanie pominięte: ${done.skip}` : 'Kontekst skompaktowany.')
+      if (done.skip !== undefined) await $.ui.toast(`Kompaktowanie pominięte: ${done.skip}`)
+      // Its own call may not pass this mod's session.compact hook: told here then.
+      else if (landed === before) await settleCompacted($, shown, done)
     }
   } catch (error) {
     const why = error instanceof Error ? error.message : String(error)
@@ -259,11 +267,29 @@ async function runCompact($: Engine): Promise<void> {
   await readBreakdown($)
 }
 
+// Compactions of the main window that landed this load: the button's own
+// toast stands in only when none did while it waited.
+let landed = 0
+
+// What the summarizer's request cost: generated, paid in full (uncached and
+// cache-written), read from the cache. No usage: the summary was computed
+// ahead of time or a hook's, or the response reported none.
+function compactedText(done: SessionCompacted): string {
+  const { tokensBefore: from, tokensAfter: to, usage: u } = done
+  const size = from === undefined ? '' : to === undefined ? ` z ${tokens(from)}` : ` ${tokens(from)} → ${tokens(to)}`
+  const cost = u
+    ? `koszt: ${tokens(u.output_tokens)} wyjścia, ${tokens(u.input_tokens + u.cache_creation_input_tokens)} wejścia, ${tokens(u.cache_read_input_tokens)} z cache`
+    : 'bez danych o koszcie'
+  return `Skompaktowano${size} · ${cost}`
+}
+
 // A compaction raises no measurement of its own, so the last response's fill
 // would stay drawn until the next one: dropped here, the estimate stands in.
-async function settleCompacted($: Engine, shown: number | undefined): Promise<void> {
+async function settleCompacted($: Engine, shown: number | undefined, done: SessionCompacted): Promise<void> {
+  landed++
   await update($, staleCtx, () => shown ?? 0)
   await update($, usage, u => ({ ...u, ctxTokens: undefined, ctxPercent: undefined }))
+  await $.ui.toast(compactedText(done))
   await readBreakdown($)
 }
 
@@ -327,7 +353,7 @@ export const register: Register = (on, options) => {
     if (e.agentId || e.trigger === 'precompute') return next(e)
     const shown = (await read($, usage)).ctxTokens
     const done = next(e)
-    void done.then(r => (r.skip === undefined ? settleCompacted($, shown) : undefined)).catch(() => {})
+    void done.then(r => (r.skip === undefined ? settleCompacted($, shown, r) : undefined)).catch(() => {})
     return done
   })
 
