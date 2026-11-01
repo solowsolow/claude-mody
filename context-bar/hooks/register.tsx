@@ -135,6 +135,16 @@ export const register: Register = on => {
     return next(e)
   })
 
+  // A compaction ends no turn and brings no measurement, so the card would
+  // keep the window from before it. The read waits for the compaction to land
+  // but not the hook: a /compact runs longer than a hook's budget.
+  on('session.compact', async ($, e, next) => {
+    if (e.agentId || e.trigger === 'precompute') return next(e)
+    const done = next(e)
+    void done.then(r => (r.skip === undefined ? refresh($, true) : undefined)).catch(() => {})
+    return done
+  })
+
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     // Whatever else draws here (another mod's band) stays, below the card.
     const below = await next(e)

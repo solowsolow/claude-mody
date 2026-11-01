@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import type { On } from 'claude-code'
+import type { On, SessionMessage } from 'claude-code'
 
 const BAND = {
   plugin: 'context-bar',
@@ -27,20 +27,22 @@ const ROWS = [
   row('Autocompact buffer', 13_000, 'buffer'),
 ]
 
-function engine(on: On, total = 90_300, beneath?: string, stored: Record<string, unknown> = {}) {
+function engine(on: On, total: number | (() => number) = 90_300, beneath?: string, stored: Record<string, unknown> = {}) {
   mock.clock(on, { now: Date.parse('2026-10-29T15:00:00Z') })
   mock.store(on, stored)
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('command.register', () => ({ value: { command: 'context-bar' } }))
   on('turn.complete', (_, e) => ({ text: e.answer }))
-  on('session.usage', () => ({
+  on('session.usage', () => {
+    const now = typeof total === 'number' ? total : total()
+    return {
     value: {
       startedAt: 0,
       context: {
-        tokens: total,
+        tokens: now,
         window: 1_000_000,
         breakdown: {
-          totalTokens: total,
+          totalTokens: now,
           rawMaxTokens: 1_000_000,
           isAutoCompactEnabled: true,
           autoCompactThreshold: 987_000,
@@ -49,7 +51,8 @@ function engine(on: On, total = 90_300, beneath?: string, stored: Record<string,
       },
       rateLimits: [],
     },
-  }) as never)
+  } as never
+  })
   // The engine draws nothing above the prompt; a test may stand another mod there.
   on('ui.render', ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
@@ -284,5 +287,30 @@ test('a row beneath, a button in it or not, is parted by one gap', async ($, on)
 
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   expect((await ui.findAll({ type: 'Box' })).find(b => b.key === 'context-band')?.props.gap).toBe('sm')
+  await ui.unmount()
+})
+
+// No turn ends and no measurement comes after a compaction: the card read
+// 210k, the figure from before, while the window held far less.
+test('a compaction redraws the card with the window after it', async ($, on) => {
+  let total = 210_463
+  engine(on, () => total)
+  const summary: SessionMessage[] = [{ role: 'user', text: 'podsumowanie', toolUses: [] }]
+  on('session.compact', () => ({ messages: summary, tokensBefore: 210_463, tokensAfter: 69_878 }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const header = async () => (await ui.find({ type: 'Text', text: /z 1M/ }))?.text
+  expect(await header()).toBe('210k z 1M · kompaktuje przy 987k')
+
+  total = 186_000
+  await $.session.compact({ trigger: 'manual', messages: summary } as never)
+  for (let i = 0; i < 50 && (await header())?.startsWith('210k'); i++);
+  expect(await header()).toBe('186k z 1M · kompaktuje przy 987k')
+
+  // A subagent's compaction is not the main window's.
+  total = 120_000
+  await $.session.compact({ trigger: 'auto', agentId: 'a1', messages: summary } as never)
+  for (let i = 0; i < 10; i++) await header()
+  expect(await header()).toBe('186k z 1M · kompaktuje przy 987k')
   await ui.unmount()
 })
