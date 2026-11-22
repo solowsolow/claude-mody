@@ -367,6 +367,41 @@ x`
   await ui.unmount()
 })
 
+// Nothing that steers a terminal or flips text direction may reach a row.
+const UNSAFE = /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/
+
+test('names, descriptions, colours and tool labels reach the row clean', async ($, on) => {
+  const files = {
+    // A name that steers the terminal: the file's own name stands in.
+    'scout.md': `---\nname: "scout\u001b[31m"\ndescription: "Szuka\u001b]8;;http://e\u0007 \u202eesrever\u202c plików"\ncolor: "red\u001b[0m"\n---\nx`,
+    // Neither the name nor the file's is one the engine would run: left out.
+    '\u001b[2J.md': `---\nname: "\u001b[2J"\n---\nx`,
+  }
+  const live: Live = { id: 's1', description: 'Zadanie\u001b[1A\u0007 od modelu', type: 'scout', status: 'running' }
+  const clock = engine(on, files, [live])
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+  await clock.advance(1000)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+
+  expect((await ui.find({ type: 'Text', text: /^scout$/ }))?.text).toBe('scout')
+  expect(await ui.find({ type: 'Text', text: /2J/ })).toBeUndefined()
+  // The dot falls back to the palette, as for a file that names no colour.
+  const dot = (await ui.findAll({ type: 'Text', text: /^●$/ }))[0]
+  expect(dot?.props.color).toBe('#7C9CC8')
+  // Before the agent's first tool call the row still shows the description.
+  expect((await ui.find({ type: 'Text', text: /^Szuka/ }))?.text).toBe('Szuka ]8;;http://e esrever plików')
+
+  await callTool($, { tool: 'WebFetch', url: 'https://jan:tajne@example.com/a?b=1', agentId: 's1' })
+  expect((await ui.find({ type: 'Text', text: /⏵/ }))?.text).toBe('⏵ WebFetch · example.com')
+  await callTool($, { tool: 'Bash\u001b[2J', command: 'rm\u001b[8m -rf', agentId: 's1' })
+  expect((await ui.find({ type: 'Text', text: /⏵/ }))?.text).toBe('⏵ Bash [2J · rm')
+
+  const shown = (await ui.findAll({ type: 'Text' })).map(t => t.text).join(' ')
+  expect(UNSAFE.test(shown)).toBe(false)
+  expect(shown).not.toMatch(/tajne/)
+  await ui.unmount()
+})
+
 test('a session starts with the pane closed; /agents-panel opens it', async ($, on) => {
   engine(on, { 'release-notes.md': NOTES })
   await $.session.start({ cwd: '/proj', surface: 'desktop', isInteractive: true })

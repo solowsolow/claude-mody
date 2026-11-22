@@ -144,7 +144,7 @@ Panel obok czatu, otwierany komendą `/agents-panel`, z agentami zdefiniowanymi 
 - **pomiar**: „kontekst 42k z 200k 21% · zużyto 34k” i cienki pasek zapełnienia okna, który płynnie dorasta przy każdym zapytaniu. Kolory są takie jak w context-bar: bursztynowy od 50%, czerwony od 80%. „Zużyto” to wszystkie tokeny zapytań agenta, razem z odczytami cache;
 - **INNE AGENTY**: subagenci, których Claude uruchamia z typów bez pliku w `.claude/agents` (np. `Explore`, `general-purpose`), z tymi samymi danymi. Zakończeni zostają widoczni przez 10 minut.
 
-Przycisk **▶ uruchom** startuje agenta z ogólnym zadaniem („wykonaj swoje zadanie na bieżącym stanie projektu i zwróć raport”), więc zużywa tokeny jak każdy subagent. Panel czyta pliki agentów i pokazuje model oraz effort z ich frontmattera bez znaków sterujących, przycięte do 24 znaków.
+Przycisk **▶ uruchom** startuje agenta z ogólnym zadaniem („wykonaj swoje zadanie na bieżącym stanie projektu i zwróć raport”), więc zużywa tokeny jak każdy subagent. Teksty z zewnątrz trafiają do panelu bez znaków sterujących i bez znaków zmieniających kierunek tekstu, przycięte do rozsądnej długości. Chodzi o nazwę, opis, model i effort z pliku agenta oraz o opis zadania i argumenty narzędzi od Claude. Plik agenta o nazwie, której Claude Code by nie uruchomił, jest pomijany, a z adresu URL panel pokazuje sam host, bez loginu i hasła.
 
 ## Co mody zapisują na dysku
 

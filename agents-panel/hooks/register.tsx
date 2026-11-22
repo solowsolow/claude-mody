@@ -61,20 +61,35 @@ function parseFrontmatter(text: string): Record<string, string> {
   return out
 }
 
-// A short frontmatter field (model, effort) as the row may draw it: anyone who
-// can write the project's agent files writes it, so no control characters
-// reach a terminal and no length pushes the row apart.
-function tidyField(raw: string | undefined): string | undefined {
-  const clean = raw?.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 24)
+// Text from outside the mod as a row may draw it. Agent files are written by
+// anyone who can write the project, a spawn's description and a tool's
+// arguments by the model: no control character or direction override reaches
+// a terminal, and no length pushes the row apart.
+const UNSAFE = /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g
+
+function tidyText(raw: string | undefined, max: number): string | undefined {
+  const clean = raw?.replace(UNSAFE, ' ').replace(/\s+/g, ' ').trim().slice(0, max)
   return clean || undefined
 }
 
+// A short frontmatter field: model, effort.
+function tidyField(raw: string | undefined): string | undefined {
+  return tidyText(raw, 24)
+}
+
 function tidyDescription(raw: string): string {
-  return raw
-    .replace(/\\n/g, ' ')
-    .replace(/<example>[\s\S]*$/i, '')
-    .replace(/\s+/g, ' ')
-    .trim()
+  return tidyText(raw.replace(/\\n/g, ' ').replace(/<example>[\s\S]*$/i, ''), 300) ?? ''
+}
+
+// The names Claude Code gives agent types, a plugin's `plugin:name` among
+// them. A definition under any other name is one the engine would not run.
+const AGENT_NAME = /^[A-Za-z0-9][\w.:-]{0,63}$/
+
+// A dot colour a file may ask for: a palette word, else `#rgb` or `#rrggbb`.
+function fileColor(raw: string | undefined): string | undefined {
+  const color = raw?.trim().toLowerCase()
+  if (!color) return undefined
+  return DOTS[color] ?? (/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/.test(color) ? color : undefined)
 }
 
 type Source = { scope: AgentScope; dir: string }
@@ -113,7 +128,9 @@ async function refreshDefs($: Engine): Promise<void> {
   const seen = new Set<string>()
   for (const file of files) {
     const meta = parseFrontmatter(await $.fs.read(file.path))
-    const name = meta.name || file.stem
+    const asked = meta.name?.trim()
+    const name = asked && AGENT_NAME.test(asked) ? asked : AGENT_NAME.test(file.stem) ? file.stem : undefined
+    if (name === undefined) continue
     // A project agent shadows a user agent of the same name, as Claude Code does.
     if (seen.has(name)) continue
     seen.add(name)
@@ -122,7 +139,7 @@ async function refreshDefs($: Engine): Promise<void> {
       model: tidyField(meta.model) ?? 'inherit',
       description: tidyDescription(meta.description ?? ''),
       effort: tidyField(meta.effort),
-      color: meta.color,
+      color: fileColor(meta.color),
       scope: file.scope,
       path: file.path,
     })
@@ -133,7 +150,10 @@ async function refreshDefs($: Engine): Promise<void> {
 
 // ---------------------------------------------------------------- runs
 
-async function addRun($: Engine, agentId: string, type: string, description?: string): Promise<void> {
+async function addRun($: Engine, agentId: string, rawType: string, rawDescription?: string): Promise<void> {
+  // Both come from the spawn, the model's own words among them.
+  const type = tidyText(rawType, 64) ?? 'agent'
+  const description = tidyText(rawDescription, 160)
   const startedAt = await $.clock.now()
   await update($, runs, list =>
     list.some(r => r.agentId === agentId)
@@ -255,18 +275,23 @@ async function tick($: Engine, count: number): Promise<void> {
 // that tells its calls apart (a file's name, a command's first word, a host).
 function toolLabel(e: { tool: string } & Record<string, unknown>): string {
   const name = e.tool.startsWith('mcp__') ? e.tool.split('__').pop() ?? e.tool : e.tool
-  const text = (key: string) => (typeof e[key] === 'string' ? (e[key] as string) : undefined)
+  // Cleaned as read, so a control character parts words instead of joining them.
+  const text = (key: string) => (typeof e[key] === 'string' ? tidyText(e[key] as string, 400) : undefined)
   const path = text('file_path') ?? text('notebook_path') ?? text('path')
   const url = text('url')
-  const detail =
+  const raw =
     (path && path.split('/').filter(Boolean).pop()) ??
     text('command')?.trim().split(/\s+/)[0] ??
     text('pattern') ??
-    (url && url.replace(/^https?:\/\/([^/]+).*$/, '$1')) ??
+    // The host alone: a user and password in the URL stay out of the row.
+    (url && url.replace(/^[a-z][\w+.-]*:\/\/(?:[^@/?#]*@)?([^/?#:]+).*$/i, '$1')) ??
     text('query') ??
     text('description')
+  // Cleaned first, cut after, so the cut never lands inside what was removed.
+  const detail = tidyText(raw, 200)
   const short = detail && detail.length > 28 ? `${detail.slice(0, 27)}…` : detail
-  return short ? `${name} · ${short}` : name
+  const label = tidyText(name, 40) ?? 'tool'
+  return short ? `${label} · ${short}` : label
 }
 
 // Runs whose agent type has no file in .claude/agents stay listed this long
@@ -278,7 +303,9 @@ const IDLE_TICKS = 30
 // ---------------------------------------------------------------- drawing helpers
 
 function dotColor(def: AgentDef, index: number): string {
-  return (def.color && DOTS[def.color.toLowerCase()]) || def.color || DOT_ORDER[index % DOT_ORDER.length] || ACCENT
+  // `color` passed fileColor already; one stored by an earlier version is
+  // checked again on the way out.
+  return fileColor(def.color) || DOT_ORDER[index % DOT_ORDER.length] || ACCENT
 }
 
 function elapsed(ms: number): string {
