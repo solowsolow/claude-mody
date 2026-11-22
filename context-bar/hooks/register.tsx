@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface as Engine, Register } from 'claude-code'
+import type { EngineInterface as Engine, ModelUsage, Register } from 'claude-code'
 
-import type { ContextSnapshot } from '../types'
+import type { ContextSnapshot, SessionSpent } from '../types'
 
 // Change the tag when ContextSnapshot's fields change: it declines what an
 // earlier version stored, which outlives a reload.
@@ -11,6 +11,7 @@ const isHidden = atom({ plugin: 'context-bar', key: 'isHidden' } as const, false
 // the store across sessions, and mirrored here for the drawing to read.
 const isLegendHidden = atom({ plugin: 'context-bar', key: 'isLegendHidden' } as const, false)
 const LEGEND_KEY = 'legendHidden'
+const spent = atom({ plugin: 'context-bar', key: 'spent' } as const, null, { shape: 'spent-1' })
 
 // A breakdown is a local estimate, cheap but not free: during a turn, at most
 // one every this often.
@@ -66,6 +67,73 @@ async function refresh($: Engine, force = false): Promise<void> {
   }
 }
 
+// ---------------------------------------------------------------- session tally
+
+// The engine keeps no token total for a session, only its cost, so the mod
+// counts one: every model request of the conversation and its subagents
+// (turn.step) and every compaction's summarizer request (session.compact).
+// It lives in the store under the session's start, so a reload of the mod and
+// a resumed session carry on with it, and /clear, which restarts the session's
+// clock, starts a new one.
+const SPENT_PREFIX = 'spent-'
+const SPENT_KEEP_MS = 30 * 24 * 60 * 60_000
+// A tally begun this long after the session's start says from when it counts.
+const LATE_MS = 60_000
+
+let tally: SessionSpent | undefined
+let opening: { startedAt: number; ready: Promise<SessionSpent> } | undefined
+
+function isTally(value: unknown): value is SessionSpent {
+  const t = value as SessionSpent | null
+  return typeof t?.startedAt === 'number' && typeof t.tokens === 'number' && typeof t.since === 'number'
+}
+
+function tokensOf(u: ModelUsage): number {
+  return u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens + u.output_tokens
+}
+
+// The tally of the session as it stands: the one in hand, the stored one of
+// that start, or a new one. One load per start, however many requests ask.
+async function currentTally($: Engine): Promise<SessionSpent> {
+  const { startedAt } = await $.session.usage()
+  if (tally?.startedAt === startedAt) return tally
+  if (opening?.startedAt !== startedAt) {
+    const ready = (async () => {
+      const kept = await $.store.get(SPENT_PREFIX + startedAt)
+      if (isTally(kept) && kept.startedAt === startedAt) return kept
+      return { startedAt, tokens: 0, since: Math.max(startedAt, await $.clock.now()) }
+    })()
+    opening = { startedAt, ready }
+  }
+  const loaded = await opening.ready
+  if (tally?.startedAt !== startedAt) tally = loaded
+  return tally
+}
+
+async function count($: Engine, n: number): Promise<void> {
+  const base = await currentTally($)
+  // Read and written with no await between, so parallel subagents' steps all land.
+  const held = tally?.startedAt === base.startedAt ? tally : base
+  const counted = { ...held, tokens: held.tokens + n }
+  tally = counted
+  await update($, spent, () => counted)
+  await $.store.set(SPENT_PREFIX + counted.startedAt, counted)
+}
+
+// Drops the tallies of sessions that started over a month ago.
+async function prune($: Engine): Promise<void> {
+  const cutoff = (await $.clock.now()) - SPENT_KEEP_MS
+  for (const key of await $.store.keys()) {
+    if (key.startsWith(SPENT_PREFIX) && Number(key.slice(SPENT_PREFIX.length)) < cutoff) await $.store.delete(key)
+  }
+}
+
+function minutes(ms: number): string {
+  const m = Math.floor(ms / 60_000)
+  if (m < 1) return '<1 min'
+  return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`
+}
+
 function tokens(n: number): string {
   if (n < 1000) return String(Math.round(n))
   if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0).replace(/\.0$/, '')}k`
@@ -108,6 +176,13 @@ export const register: Register = on => {
     const stored = (await $.store.get(LEGEND_KEY)) === true
     await update($, isLegendHidden, () => stored)
     await refresh($, true)
+    try {
+      const held = await currentTally($)
+      await update($, spent, () => held)
+      await prune($)
+    } catch {
+      // No session bound yet: the first request opens the tally.
+    }
 
     return next(e)
   })
@@ -139,10 +214,23 @@ export const register: Register = on => {
   // keep the window from before it. The read waits for the compaction to land
   // but not the hook: a /compact runs longer than a hook's budget.
   on('session.compact', async ($, e, next) => {
-    if (e.agentId || e.trigger === 'precompute') return next(e)
     const done = next(e)
+    // Any compaction's summarizer request counts, a precomputed one and a
+    // subagent's too; one that reuses a summary reports no usage of its own.
+    void done.then(r => (r.skip === undefined && r.usage ? count($, tokensOf(r.usage)) : undefined)).catch(() => {})
+    if (e.agentId || e.trigger === 'precompute') return done
     void done.then(r => (r.skip === undefined ? refresh($, true) : undefined)).catch(() => {})
     return done
+  })
+
+  // Every model request of the conversation and of its subagents adds what it
+  // went through to the session's tally. The count waits for no one: the
+  // response goes on as it came.
+  on('turn.step', async function* ($, e, next) {
+    const answered = yield* next(e)
+    if (answered.usage) void count($, tokensOf(answered.usage)).catch(() => {})
+
+    return answered
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
@@ -153,6 +241,8 @@ export const register: Register = on => {
 
     const { Box, Text, Button } = $.ui.resolve(e)
     const legendHidden = await read($, isLegendHidden)
+    const session = await read($, spent)
+    const at = await $.clock.now()
     const isTerminal = e.surface === 'terminal'
     const fs = isTerminal ? undefined : ('footnote' as const)
     const { total, window, threshold, rows } = taken
@@ -249,6 +339,17 @@ export const register: Register = on => {
             <Button key="legend-toggle" plain dimColor onPress={() => toggleLegend($)}>
               <Text size={fs}>{legendHidden ? '▶︎' : '▼'}</Text>
             </Button>
+            {/* What the whole session went through so far. A tally the mod
+                began late says how long it covers instead of "w sesji". */}
+            {session !== null && session.tokens > 0 && (
+              <Box key="session-spent" paddingLeft={isTerminal ? 1 : 0.5}>
+                <Text dimColor tabular size={fs}>
+                  {session.since - session.startedAt > LATE_MS
+                    ? `zużyto ${tokens(session.tokens)} od ${minutes(at - session.since)}`
+                    : `zużyto w sesji ${tokens(session.tokens)}`}
+                </Text>
+              </Box>
+            )}
           </Box>
           <Box flexDirection="row" alignItems="center" gap="sm">
             <Text dimColor tabular size={fs}>

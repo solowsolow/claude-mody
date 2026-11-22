@@ -5,7 +5,7 @@ const BAND = {
   plugin: 'context-bar',
   component: 'AbovePrompt',
   requestId: 'above-prompt',
-  props: { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 120, scroll: { offset: 0, bodyRows: 12 }, view: {} },
+  props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 12, bodyColumns: 120, scroll: { offset: 0, bodyRows: 12 }, view: {} },
 } as const
 
 // A stand-in for usage-bar's row, whose button is taller than a line of text.
@@ -27,9 +27,18 @@ const ROWS = [
   row('Autocompact buffer', 13_000, 'buffer'),
 ]
 
+// The clock's start; a session starts then unless a test moves it.
+const T0 = Date.parse('2026-10-29T15:00:00Z')
+let startedAt = T0
+
 function engine(on: On, total: number | (() => number) = 90_300, beneath?: string, stored: Record<string, unknown> = {}) {
-  mock.clock(on, { now: Date.parse('2026-10-29T15:00:00Z') })
-  mock.store(on, stored)
+  startedAt = T0
+  const clock = mock.clock(on, { now: T0 })
+  // The store as a plain object the test reads back: what the mod wrote, and deleted.
+  on('store.get', (_, e) => ({ value: stored[e.key] }) as never)
+  on('store.set', (_, e) => ((stored[e.key] = e.value), { value: undefined }) as never)
+  on('store.delete', (_, e) => (delete stored[e.key], { value: undefined }) as never)
+  on('store.keys', () => ({ value: Object.keys(stored) }) as never)
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('command.register', () => ({ value: { command: 'context-bar' } }))
   on('turn.complete', (_, e) => ({ text: e.answer }))
@@ -37,7 +46,7 @@ function engine(on: On, total: number | (() => number) = 90_300, beneath?: strin
     const now = typeof total === 'number' ? total : total()
     return {
     value: {
-      startedAt: 0,
+      startedAt,
       context: {
         tokens: now,
         window: 1_000_000,
@@ -74,6 +83,7 @@ function engine(on: On, total: number | (() => number) = 90_300, beneath?: strin
     // Nothing else in the band: the engine's own slot, as a live band hands it.
     return beneath ? <Text>{beneath}</Text> : ({ type: 'engine', ref: 0 } as never)
   })
+  return clock
 }
 
 test('the header reads like the screenshot, on terminal and desktop', async ($, on) => {
@@ -312,5 +322,105 @@ test('a compaction redraws the card with the window after it', async ($, on) => 
   await $.session.compact({ trigger: 'auto', agentId: 'a1', messages: summary } as never)
   for (let i = 0; i < 10; i++) await header()
   expect(await header()).toBe('186k z 1M · kompaktuje przy 987k')
+  await ui.unmount()
+})
+
+type Usage = { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number }
+const used = (input: number, read: number, write: number, output: number): Usage => ({
+  input_tokens: input,
+  cache_read_input_tokens: read,
+  cache_creation_input_tokens: write,
+  output_tokens: output,
+})
+
+// What the engine's next model response reports; a test sets it before a step.
+let stepUsage: Usage | null = null
+
+function answers(on: On) {
+  on('turn.step', async function* () {
+    return { turnId: 't', index: 0, answer: '', toolUses: [], stopReason: 'end_turn', usage: stepUsage && { ...stepUsage, model: 'm' } } as never
+  })
+}
+
+// One model request of a loop through the hooks, read to its end.
+async function step($: { turn: { step: unknown } }, usage: Usage | null, agentId?: string): Promise<unknown> {
+  stepUsage = usage
+  const stream = ($.turn.step as (e: unknown) => AsyncGenerator<unknown, unknown>)({ turnId: 't', index: 0, model: 'm', messageCount: 2, agentId })
+  for (;;) {
+    const r = await stream.next()
+    if (r.done) return r.value
+  }
+}
+
+test('the header counts every token the session went through: its requests, its subagents\', its compactions\'', async ($, on) => {
+  const stored: Record<string, unknown> = {}
+  engine(on, 90_300, undefined, stored)
+  answers(on)
+  const summary: SessionMessage[] = [{ role: 'user', text: 'podsumowanie', toolUses: [] }]
+  on('session.compact', () => ({ messages: summary, usage: used(500, 0, 0, 1500) }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const spentText = async () => (await ui.find({ type: 'Text', text: /zużyto/ }))?.text
+  // Nothing counted yet: nothing said.
+  expect(await spentText()).toBeUndefined()
+
+  // The main loop's request, a subagent's, one with no usage and a compaction.
+  expect(await step($, used(2000, 30_000, 1000, 500))).toMatchObject({ stopReason: 'end_turn' })
+  await step($, used(1000, 8000, 0, 2000), 'a1')
+  await step($, null)
+  await $.session.compact({ trigger: 'auto', messages: summary } as never)
+  for (let i = 0; i < 20 && (await spentText()) !== 'zużyto w sesji 47k'; i++);
+
+  // 33.5k + 11k + 2k = 46.5k, shown rounded
+  expect(await spentText()).toBe('zużyto w sesji 47k')
+  expect((await ui.find({ type: 'Text', text: /zużyto/ }))?.props.dimColor).toBe(true)
+  expect(stored[`spent-${T0}`]).toEqual({ startedAt: T0, tokens: 46_500, since: T0 })
+  stepUsage = null
+  await ui.unmount()
+})
+
+test('a reload or a resumed session carries on with the stored tally; /clear starts a new one', async ($, on) => {
+  const old = T0 - 40 * 24 * 60 * 60_000
+  const stored: Record<string, unknown> = {
+    [`spent-${T0}`]: { startedAt: T0, tokens: 2_400_000, since: T0 },
+    // A session over a month old: pruned as this one starts.
+    [`spent-${old}`]: { startedAt: old, tokens: 9, since: old },
+  }
+  const clock = engine(on, 90_300, undefined, stored)
+  answers(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  expect(Object.keys(stored).sort()).toEqual([`spent-${T0}`])
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  const spentText = async () => (await ui.find({ type: 'Text', text: /zużyto/ }))?.text
+  expect(await spentText()).toBe('zużyto w sesji 2.4M')
+
+  await step($, used(0, 95_000, 0, 5000))
+  for (let i = 0; i < 20 && (await spentText()) !== 'zużyto w sesji 2.5M'; i++);
+  expect(await spentText()).toBe('zużyto w sesji 2.5M')
+
+  // /clear: the session's clock starts over, and so does the tally.
+  await clock.advance(60_000)
+  startedAt = T0 + 60_000
+  await step($, used(1000, 0, 0, 200))
+  for (let i = 0; i < 20 && (await spentText()) !== 'zużyto w sesji 1.2k'; i++);
+  expect(await spentText()).toBe('zużyto w sesji 1.2k')
+  expect(stored[`spent-${T0}`]).toEqual({ startedAt: T0, tokens: 2_500_000, since: T0 })
+  stepUsage = null
+  await ui.unmount()
+})
+
+test('a tally the mod began late says how long it covers', async ($, on) => {
+  const clock = engine(on)
+  answers(on)
+  // The session ran an hour before the mod came.
+  startedAt = T0 - 60 * 60_000
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await clock.advance(25 * 60_000)
+  await step($, used(1000, 10_000, 0, 1000))
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  let text: string | undefined
+  for (let i = 0; i < 20 && !(text = (await ui.find({ type: 'Text', text: /zużyto/ }))?.text); i++);
+  expect(text).toBe('zużyto 12k od 25 min')
+  stepUsage = null
   await ui.unmount()
 })

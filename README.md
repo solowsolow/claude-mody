@@ -101,6 +101,7 @@ Opcja `cacheTtl` (60 albo 5 minut) ustawia czas życia cache, bo Claude Code go 
 Karta nad polem promptu z podziałem kontekstu, jak w `/context`, tylko stale na widoku:
 
 - nagłówek z zajętością okna, progiem kompaktowania i procentem (zielony, bursztynowy od 50%, czerwony od 80%);
+- obok tytułu liczba tokenów zużytych od startu sesji („zużyto w sesji 12.4M”): wszystkie zapytania rozmowy i jej subagentów oraz podsumowania przy kompaktowaniu, razem z odczytami cache. Mod liczy ją sam, bo Claude Code takiej sumy nie podaje. Wznowiona sesja liczy dalej, a `/clear` zaczyna od zera;
 - pasek kategorii w proporcji do okna z bursztynowym znacznikiem progu auto-kompaktowania;
 - legenda: prompt systemowy, narzędzia, narzędzia MCP, instrukcje MCP, agenci, pliki pamięci, skille, wiadomości i wolne miejsce.
 
@@ -130,7 +131,7 @@ Gdy Claude chce zmienić plik (`Edit`, `Write`, `NotebookEdit`), który w ostatn
 
 ## Co mody zapisują na dysku
 
-Nic nie jest wysyłane poza Twój komputer. radar-sesji i collision-guard zapisują drobne pliki stanu (ok. 300 bajtów na sesję) w `~/.claude/radar-sesji/` i `~/.claude/collision-guard/`, żeby sesje mogły się nawzajem widzieć. usage-bar i context-bar zapamiętują w magazynie pluginu tylko swoje ustawienia, np. czas ostatniej tury i zwinięcie legendy.
+Nic nie jest wysyłane poza Twój komputer. radar-sesji i collision-guard zapisują drobne pliki stanu (ok. 300 bajtów na sesję) w `~/.claude/radar-sesji/` i `~/.claude/collision-guard/`, żeby sesje mogły się nawzajem widzieć. usage-bar i context-bar zapamiętują w magazynie pluginu swoje ustawienia, np. czas ostatniej tury i zwinięcie legendy. context-bar trzyma tam też dla każdej sesji jedną liczbę zużytych tokenów i usuwa liczniki sesji starszych niż 30 dni.
 
 ## Dla zaglądających w kod
 
