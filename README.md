@@ -1,15 +1,16 @@
 # claude-mody
 
-Cztery mody do Claude Code po polsku. Każdy to plugin z modułem hooków, który dokłada coś do interfejsu albo zachowania Claude Code:
+Pięć modów do Claude Code po polsku. Każdy to plugin z modułem hooków, który dokłada coś do interfejsu albo zachowania Claude Code:
 
 | mod | co robi |
 |---|---|
 | **usage-bar** | pasek nad polem promptu: stan cache promptu, zapełnienie kontekstu, limity 5h i tygodniowy, przycisk kompaktowania |
-| **context-bar** | karta nad promptem z podziałem kontekstu na kategorie i progiem auto-kompaktowania |
+| **context-bar** | karta nad promptem z podziałem kontekstu na kategorie, progiem auto-kompaktowania i tokenami zużytymi w sesji |
+| **agents-panel** | panel obok czatu z agentami projektu: model, effort, kontekst i zużyte tokeny każdego agenta, bieżące narzędzie i przycisk uruchomienia |
 | **radar-sesji** | linia nad promptem i panel `/sesje`: które inne sesje Claude na tym komputerze czekają na Ciebie |
 | **collision-guard** | ostrzega, zanim Claude zmieni plik, który przed chwilą zmieniała inna sesja Claude |
 
-Wymagany jest Claude Code 2.1.309 lub nowszy (mody testowano na 2.1.309–2.1.312, na macOS).
+Wymagany jest Claude Code 2.1.309 lub nowszy (mody testowano na 2.1.309–2.1.312, na macOS). agents-panel i licznik tokenów sesji w context-bar sprawdzano na 2.1.330. Na starszej wersji brakujące dane po prostu się nie pojawią.
 
 ## Instalacja w Claude Code
 
@@ -19,12 +20,13 @@ Wklej poniższy tekst jako wiadomość w dowolnej sesji Claude Code, w terminalu
 Zainstaluj mi mody do Claude Code z publicznego repozytorium solowsolow/claude-mody.
 
 1. Dodaj marketplace: claude plugin marketplace add solowsolow/claude-mody
-2. Zainstaluj w zakresie user cztery mody, każdy osobnym poleceniem:
+2. Zainstaluj w zakresie user pięć modów, każdy osobnym poleceniem:
    claude plugin install usage-bar@claude-mody --scope user --config cacheTtl=60
    claude plugin install context-bar@claude-mody --scope user
    claude plugin install radar-sesji@claude-mody --scope user
    claude plugin install collision-guard@claude-mody --scope user --config windowMinutes=30
-3. Sprawdź w ~/.claude/plugins/installed_plugins.json, że wszystkie cztery są zainstalowane, i podaj mi ich wersje.
+   claude plugin install agents-panel@claude-mody --scope user
+3. Sprawdź w ~/.claude/plugins/installed_plugins.json, że wszystkie pięć jest zainstalowanych, i podaj mi ich wersje.
 
 Jeśli polecenie `claude` nie działa w terminalu, nie instaluj niczego innym sposobem, tylko powiedz mi, jak dodać marketplace w aplikacji.
 Na koniec przypomnij mi, że mody zaczną działać od następnej nowej sesji.
@@ -54,9 +56,13 @@ claude plugin install radar-sesji@claude-mody --scope user
 claude plugin install collision-guard@claude-mody --scope user --config windowMinutes=30
 ```
 
+```bash
+claude plugin install agents-panel@claude-mody --scope user
+```
+
 ### Bez terminala: w aplikacji desktopowej
 
-Kliknij **+** obok pola promptu, potem **Plugins** i **Add marketplace**, wpisz `solowsolow/claude-mody`, a następnie dodaj po kolei cztery pluginy przez **Add plugin**.
+Kliknij **+** obok pola promptu, potem **Plugins** i **Add marketplace**, wpisz `solowsolow/claude-mody`, a następnie dodaj po kolei pięć pluginów przez **Add plugin**.
 
 ### Po instalacji
 
@@ -129,9 +135,20 @@ Gdy Claude chce zmienić plik (`Edit`, `Write`, `NotebookEdit`), który w ostatn
 
 `/kolizje` pokazuje pliki edytowane przez inne aktywne sesje. Opcja `windowMinutes` (15, 30 albo 60) ustawia okno kolizji. Mod widzi tylko zmiany wprowadzane przez Claude na tym komputerze, a nie te z edytora czy z innej maszyny.
 
+## agents-panel
+
+Panel obok czatu, otwierany komendą `/agents-panel`, z agentami zdefiniowanymi w `.claude/agents` projektu i w `~/.claude/agents`:
+
+- **wiersz agenta**: nazwa, model i effort (np. „haiku 4.5 · low”), opis i przycisk **▶ uruchom** (skróty 1–9). Przed pierwszym uruchomieniem model i effort pochodzą z pliku agenta, potem z jego ostatniego zapytania;
+- **podczas pracy**: spinner, czas („działa · 12s”) i bieżące narzędzie zamiast opisu (np. „⏵ Read · app.ts”), a po zakończeniu „✓” albo „✕”. Kliknięcie w status otwiera transkrypt agenta;
+- **pomiar**: „kontekst 42k z 200k 21% · zużyto 34k” i cienki pasek zapełnienia okna, który płynnie dorasta przy każdym zapytaniu. Kolory są takie jak w context-bar: bursztynowy od 50%, czerwony od 80%. „Zużyto” to wszystkie tokeny zapytań agenta, razem z odczytami cache;
+- **INNE AGENTY**: subagenci, których Claude uruchamia z typów bez pliku w `.claude/agents` (np. `Explore`, `general-purpose`), z tymi samymi danymi. Zakończeni zostają widoczni przez 10 minut.
+
+Przycisk **▶ uruchom** startuje agenta z ogólnym zadaniem („wykonaj swoje zadanie na bieżącym stanie projektu i zwróć raport”), więc zużywa tokeny jak każdy subagent. Panel czyta pliki agentów i pokazuje model oraz effort z ich frontmattera bez znaków sterujących, przycięte do 24 znaków.
+
 ## Co mody zapisują na dysku
 
-Nic nie jest wysyłane poza Twój komputer. radar-sesji i collision-guard zapisują drobne pliki stanu (ok. 300 bajtów na sesję) w `~/.claude/radar-sesji/` i `~/.claude/collision-guard/`, żeby sesje mogły się nawzajem widzieć. usage-bar i context-bar zapamiętują w magazynie pluginu swoje ustawienia, np. czas ostatniej tury i zwinięcie legendy. context-bar trzyma tam też dla każdej sesji jedną liczbę zużytych tokenów i usuwa liczniki sesji starszych niż 30 dni.
+Nic nie jest wysyłane poza Twój komputer. radar-sesji i collision-guard zapisują drobne pliki stanu (ok. 300 bajtów na sesję) w `~/.claude/radar-sesji/` i `~/.claude/collision-guard/`, żeby sesje mogły się nawzajem widzieć. usage-bar i context-bar zapamiętują w magazynie pluginu swoje ustawienia, np. czas ostatniej tury i zwinięcie legendy. context-bar trzyma tam też dla każdej sesji jedną liczbę zużytych tokenów i usuwa liczniki sesji starszych niż 30 dni. agents-panel nie zapisuje niczego na dysku: listę uruchomień trzyma tylko na czas sesji.
 
 ## Dla zaglądających w kod
 

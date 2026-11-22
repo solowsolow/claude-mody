@@ -23,6 +23,11 @@
       "name": "collision-guard",
       "source": "./collision-guard",
       "description": "Ostrzega, gdy druga sesja Claude chce edytować plik niedawno zmieniany przez inną aktywną sesję, i proponuje pracę w osobnym worktree"
+    },
+    {
+      "name": "agents-panel",
+      "source": "./agents-panel",
+      "description": "Panel obok czatu z agentami projektu i użytkownika: model, effort, kontekst i zużyte tokeny każdego agenta, status pracy, bieżące narzędzie i przycisk uruchomienia"
     }
   ]
 }

@@ -1,0 +1,6 @@
+{
+  "name": "agents-panel",
+  "version": "0.3.1",
+  "description": "Panel obok czatu: agenci z .claude/agents, ich model, opis, status uruchomienia i przycisk Run",
+  "types": "./types/index.d.ts"
+}
