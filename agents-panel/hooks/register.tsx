@@ -65,7 +65,10 @@ function parseFrontmatter(text: string): Record<string, string> {
 // anyone who can write the project, a spawn's description and a tool's
 // arguments by the model: no control character or direction override reaches
 // a terminal, and no length pushes the row apart.
-const UNSAFE = /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g
+// Whole Unicode categories, not a list that misses one: controls (Cc),
+// format characters (Cf: every direction mark and override, zero-width
+// characters, U+061C) and the line and paragraph separators.
+const UNSAFE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu
 
 function tidyText(raw: string | undefined, max: number): string | undefined {
   const clean = raw?.replace(UNSAFE, ' ').replace(/\s+/g, ' ').trim().slice(0, max)
@@ -89,7 +92,9 @@ const AGENT_NAME = /^[A-Za-z0-9][\w.:-]{0,63}$/
 function fileColor(raw: string | undefined): string | undefined {
   const color = raw?.trim().toLowerCase()
   if (!color) return undefined
-  return DOTS[color] ?? (/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/.test(color) ? color : undefined)
+  // Own keys only: `constructor` or `__proto__` would reach the prototype.
+  if (Object.prototype.hasOwnProperty.call(DOTS, color)) return DOTS[color]
+  return /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/.test(color) ? color : undefined
 }
 
 type Source = { scope: AgentScope; dir: string }

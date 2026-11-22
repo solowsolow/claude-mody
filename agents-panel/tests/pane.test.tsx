@@ -368,7 +368,7 @@ x`
 })
 
 // Nothing that steers a terminal or flips text direction may reach a row.
-const UNSAFE = /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/
+const UNSAFE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u
 
 test('names, descriptions, colours and tool labels reach the row clean', async ($, on) => {
   const files = {
@@ -399,6 +399,25 @@ test('names, descriptions, colours and tool labels reach the row clean', async (
   const shown = (await ui.findAll({ type: 'Text' })).map(t => t.text).join(' ')
   expect(UNSAFE.test(shown)).toBe(false)
   expect(shown).not.toMatch(/tajne/)
+  await ui.unmount()
+})
+
+test('every format character is gone, and a colour named after the prototype is no colour', async ($, on) => {
+  const files = {
+    // An Arabic letter mark, a zero-width space, a soft hyphen, a BOM. (A line
+    // separator ends the line for the parser: the field is dropped whole.)
+    'mark.md': `---\nname: mark\ndescription: "A\u061cB\u200bCD\u00adE\ufeffF"\ncolor: constructor\n---\nx`,
+    'proto.md': `---\nname: proto\ncolor: __proto__\n---\nx`,
+  }
+  engine(on, files, [])
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+
+  expect((await ui.find({ type: 'Text', text: /^A.B/ }))?.text).toBe("A B CD E F")
+  const dots = (await ui.findAll({ type: 'Text', text: /^●$/ })).map(t => t.props.color)
+  expect(dots).toEqual(['#7C9CC8', '#6FB3C4'])
+  const shown = (await ui.findAll({ type: 'Text' })).map(t => t.text).join(' ')
+  expect(UNSAFE.test(shown)).toBe(false)
   await ui.unmount()
 })
 
